@@ -14,13 +14,14 @@ from openai import OpenAI
 
 load_dotenv()
 
-def get_setting(name: str, default: str = "") -> str:
-    """Read credentials locally from .env or from Streamlit Cloud secrets."""
+def get_setting(name, default=""):
+    """Read Streamlit Cloud secrets first, then local environment variables."""
     try:
-        value = st.secrets.get(name, default)
-        if value not in (None, ""):
+        value = st.secrets.get(name, None)
+        if value is not None:
             return str(value)
     except Exception:
+        # st.secrets may be unavailable when running locally without secrets.toml.
         pass
     return os.getenv(name, default)
 
@@ -35,13 +36,12 @@ st.set_page_config(
 )
 
 if not OPENAI_API_KEY:
-    st.error("OpenAI API key is missing. Add OPENAI_API_KEY in Streamlit Secrets or local .env.")
+    st.error("OpenAI API key is missing. Add OPENAI_API_KEY in Streamlit Secrets or your local .env file.")
     st.stop()
 
-# Canvas is optional: general chat, study, trading and projects can work
-# without a Canvas connection. Canvas features become available when both
-# Canvas settings are configured in Streamlit Secrets or the local .env.
-CANVAS_CONNECTED = bool(CANVAS_URL and CANVAS_TOKEN)
+if not CANVAS_URL or not CANVAS_TOKEN:
+    st.error("Canvas settings are missing. Add CANVAS_API_URL and CANVAS_API_TOKEN in Streamlit Secrets or your local .env file.")
+    st.stop()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -123,8 +123,6 @@ def canvas_get(endpoint, params=None):
 
 @st.cache_data(ttl=60)
 def get_courses():
-    if not CANVAS_CONNECTED:
-        return []
     return canvas_get(
         "courses",
         {
@@ -330,9 +328,8 @@ def generate_speech(text):
 
 def run_assistant(prompt, course, files):
 
-    course_id = course["id"] if course else None
-    course_name = course.get("name", "Selected course") if course else "No Canvas course selected"
-    available_tools = TOOLS if course else []
+    course_id = course["id"]
+    course_name = course.get("name", "Selected course")
 
     instructions = f"""
 You are My Assistant, a professional personal AI assistant.
@@ -354,10 +351,10 @@ Selected Canvas course:
 {course_name}
 
 Course ID:
-{course_id if course_id is not None else "Not selected"}
+{course_id}
 
-When a Canvas course is selected, you can retrieve its modules and pages.
-When no course is selected, answer general questions normally and do not claim to access Canvas.
+You can retrieve Canvas modules and pages
+using the available tools.
 
 Never claim an action succeeded unless it did.
 Never edit, delete, or publish Canvas content
@@ -411,7 +408,7 @@ without explicit user approval.
         model="gpt-5.5",
         instructions=instructions,
         input=history,
-        tools=available_tools
+        tools=TOOLS
     )
 
     for _ in range(5):
@@ -432,7 +429,7 @@ without explicit user approval.
 
                 if call.name == "get_course_modules":
 
-                    result = get_modules(course_id) if course_id is not None else []
+                    result = get_modules(course_id)
 
                     output = [
                         {
@@ -444,7 +441,7 @@ without explicit user approval.
 
                 elif call.name == "get_course_pages":
 
-                    result = get_pages(course_id) if course_id is not None else []
+                    result = get_pages(course_id)
 
                     output = [
                         {
@@ -477,160 +474,330 @@ without explicit user approval.
                 + list(response.output)
                 + outputs
             ),
-            tools=available_tools
+            tools=TOOLS
         )
 
     return response.output_text or "No response generated."
 
 # =====================================
-# =====================================
-# 11. MY ASSISTANT — REDESIGNED INTERFACE
+# 11. NEW INTERFACE
 # =====================================
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Cairo:wght@400;600;700;800&display=swap');
-.stApp{background:#f5f7ff;color:#17264b;font-family:Inter,'Cairo',sans-serif}
-[data-testid="stHeader"]{background:transparent}
-.block-container{max-width:1500px;padding:1.1rem 2.2rem 6rem}
-section[data-testid="stSidebar"]{background:linear-gradient(180deg,#10172f,#17254b);border:0}
-section[data-testid="stSidebar"] *{color:#eef2ff}
-section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p{color:#b9c5e7}
-section[data-testid="stSidebar"] [data-testid="stSelectbox"]>div>div{background:#202e55;border:1px solid #34436b;border-radius:12px}
-section[data-testid="stSidebar"] .stButton>button{background:#27365f;color:white;border:1px solid #3b4c78;border-radius:12px}
-.brand{display:flex;align-items:center;gap:12px;padding:8px 0 20px}
-.brand-mark{width:43px;height:43px;border-radius:15px;display:grid;place-items:center;background:linear-gradient(135deg,#7167ff,#20d5ca);color:white;font-size:20px;font-weight:800;box-shadow:0 8px 25px #5148d966}
-.brand-name{font-size:19px;font-weight:800;color:white}.brand-sub{font-size:10px;color:#9cadd8;margin-top:3px}
-.side-label,.section-eyebrow{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;font-weight:800;margin:22px 0 10px;color:#8493b4}
-section[data-testid="stSidebar"] .side-label{color:#8498c9}
-.hero{position:relative;overflow:hidden;border-radius:26px;padding:34px 38px;min-height:235px;background:radial-gradient(circle at 84% 20%,#697df5,transparent 25%),radial-gradient(circle at 72% 100%,#3a5ab2,transparent 36%),linear-gradient(115deg,#111c40,#253d83 58%,#607bd8);color:white;box-shadow:0 18px 45px #263b7624;margin:5px 0 24px}
-.hero:before{content:"";position:absolute;width:260px;height:260px;border:1px solid #ffffff25;border-radius:50%;right:9%;top:-110px;box-shadow:0 0 0 24px #ffffff0b,0 0 0 50px #ffffff08}
-.hero h1{color:white!important;font-size:clamp(27px,3vw,40px)!important;margin:8px 0 10px;font-weight:800!important}
-.hero p{color:#dbe5ff;font-size:14px;max-width:560px;margin:0}
-.hero-kicker{font-size:11px;letter-spacing:2px;color:#a8f5ed;font-weight:700}
-.hero-orb{position:absolute;right:13%;top:45px;width:112px;height:112px;border-radius:50%;border:2px solid #9af6ef88;background:radial-gradient(circle at 35% 30%,#c7ffff,#5c89ed 30%,#1a2a62 70%);box-shadow:0 0 0 12px #b4d7ff12,0 0 45px #6ce8f1aa;display:grid;place-items:center;font-size:45px;color:white}
-div[data-testid="stHorizontalBlock"]{gap:14px}
-div[data-testid="stHorizontalBlock"]>div [data-testid="stVerticalBlockBorderWrapper"]{border:1px solid #e4e9f7;border-radius:19px;background:white;box-shadow:0 8px 24px #273b7010}
-.module-icon{width:43px;height:43px;border-radius:14px;display:grid;place-items:center;font-size:22px;margin-bottom:11px}
-.module-title{font-size:15px;font-weight:800;color:#1b2b53;margin-bottom:4px}
-.module-desc{font-size:11px;color:#7d89a5;line-height:1.5}
-.stButton>button{border-radius:13px;border:1px solid #dfe6f6;background:#f2f5ff;color:#314b85;font-weight:700;min-height:42px}
-.stButton>button:hover{border-color:#8d9cff;background:#e9edff}
-[data-testid="stChatMessage"]{background:white;border:1px solid #e8edf7;border-radius:18px;padding:15px 18px;margin:10px 0}
-[data-testid="stChatInput"]{background:white;border:1px solid #dfe6f4;border-radius:18px;box-shadow:0 8px 24px #20345d16;padding:5px}
-[data-testid="stFileUploader"]{background:#f8faff;border:1px dashed #bdc9e6;border-radius:15px;padding:10px}
-[data-testid="stAudioInput"]{background:#f8faff;border-radius:14px;padding:8px}
-hr{border-color:#e5eaf5!important}
-@media(max-width:800px){.block-container{padding:1rem .8rem 5rem}.hero{padding:25px 22px;min-height:210px}.hero-orb{right:6%;top:25px;width:75px;height:75px;font-size:30px}.hero p{max-width:75%}}
+
+.stApp {
+    background: #F7F9FD;
+    color: #26344D;
+}
+
+.block-container {
+    max-width: 1450px;
+    padding-top: 2rem;
+}
+
+section[data-testid="stSidebar"] {
+    background: #FFFFFF;
+    border-right: 1px solid #E7ECF5;
+}
+
+h1, h2, h3 {
+    color: #263F68 !important;
+    font-weight: 700 !important;
+}
+
+.stButton > button {
+    background: #EEF4FF;
+    color: #315A9D;
+    border: 1px solid #DCE6F7;
+    border-radius: 12px;
+    min-height: 42px;
+    font-weight: 600;
+}
+
+.stButton > button:hover {
+    background: #DDEAFF;
+}
+
+.stChatInput textarea {
+    background: white;
+    border-radius: 14px;
+}
+
+[data-testid="stChatMessage"] {
+    background: white;
+    border: 1px solid #E7ECF5;
+    border-radius: 16px;
+    padding: 16px;
+    margin-bottom: 12px;
+}
+
+[data-testid="stFileUploader"] {
+    background: white;
+    border: 1px dashed #B9CBE9;
+    border-radius: 14px;
+    padding: 12px;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
+# =====================================
+# 12. SIDEBAR
+# =====================================
+
 with st.sidebar:
-    st.markdown("""
-    <div class="brand"><div class="brand-mark">AI</div><div>
-    <div class="brand-name">My Assistant</div>
-    <div class="brand-sub">YOUR PERSONAL AI WORKSPACE</div></div></div>
-    """, unsafe_allow_html=True)
-    language = st.selectbox("🌐 Language", ["English", "العربية"],
-        index=0 if st.session_state.language == "English" else 1)
+
+    st.markdown("# 🤖 My Assistant")
+
+    st.caption("Your Personal AI Workspace")
+
+    st.divider()
+
+    language = st.selectbox(
+        "Language",
+        ["English", "العربية"],
+        index=(
+            0 if st.session_state.language == "English"
+            else 1
+        )
+    )
+
     if language != st.session_state.language:
         st.session_state.language = language
         st.rerun()
-    st.markdown('<div class="side-label">Workspace</div>', unsafe_allow_html=True)
-    section = st.radio("Navigation", ["Chat","Study","Canvas","Trading","Projects"], label_visibility="collapsed")
+
+    st.divider()
+
+    st.markdown("### Workspace")
+
+    section = st.radio(
+        "Navigation",
+        [
+            "Chat",
+            "Study",
+            "Canvas",
+            "Trading",
+            "Projects"
+        ],
+        label_visibility="collapsed"
+    )
+
     st.session_state.section = section
-    st.markdown('<div class="side-label">Canvas courses</div>', unsafe_allow_html=True)
-    if st.button("↻  Refresh courses", use_container_width=True):
+
+    st.divider()
+
+    st.markdown("### Canvas Courses")
+
+    if st.button(
+        "Refresh Courses",
+        use_container_width=True
+    ):
         try:
             st.cache_data.clear()
             st.session_state.courses = get_courses()
             st.success("Courses refreshed")
         except Exception as error:
             st.error(str(error))
-    if not CANVAS_CONNECTED:
-        st.caption("Canvas is not connected yet. Add Canvas settings in Streamlit Secrets to enable it.")
-    elif not st.session_state.courses:
+
+    if not st.session_state.courses:
         try:
             st.session_state.courses = get_courses()
         except Exception as error:
-            st.warning(f"Canvas connection: {error}")
+            st.error(f"Canvas error: {error}")
+
     courses = st.session_state.courses
     selected_course = None
+
     if courses:
-        course_map = {f"{c.get('name','Unnamed')} (ID: {c['id']})":c for c in courses}
-        selected_name = st.selectbox(T["course"], list(course_map.keys()))
+
+        course_map = {
+            f"{c.get('name', 'Unnamed')} (ID: {c['id']})": c
+            for c in courses
+        }
+
+        selected_name = st.selectbox(
+            T["course"],
+            list(course_map.keys())
+        )
+
         selected_course = course_map[selected_name]
-    else:
-        st.caption("No active courses found.")
-    st.markdown('<div class="side-label">Connections</div>', unsafe_allow_html=True)
-    canvas_status = "🟢 Canvas API" if CANVAS_CONNECTED else "⚪ Canvas not configured"
-    st.markdown(f"🟢 OpenAI API<br>{canvas_status}", unsafe_allow_html=True)
-    if st.button(T["clear"], use_container_width=True):
+
+    st.divider()
+
+    st.markdown("### Connections")
+
+    st.success("OpenAI API")
+    st.success("Canvas API")
+
+    st.divider()
+
+    if st.button(
+        T["clear"],
+        use_container_width=True
+    ):
         st.session_state.messages = []
         st.rerun()
 
-welcome_line = "مرحباً بك في مساعدك الذكي" if st.session_state.language == "العربية" else "Your ideas. One intelligent workspace."
-subtitle_line = "مساعدك في الدراسة وCanvas والتداول والمشاريع" if st.session_state.language == "العربية" else "Your companion for study, Canvas, trading and projects."
-st.markdown(f"""<div class="hero"><div class="hero-kicker">MY ASSISTANT · AI WORKSPACE</div>
-<h1>{welcome_line}</h1><p>{subtitle_line}</p><div class="hero-orb">✧</div></div>""", unsafe_allow_html=True)
+# =====================================
+# 13. MAIN DASHBOARD
+# =====================================
 
-st.markdown('<div class="section-eyebrow">Explore your workspace</div>', unsafe_allow_html=True)
-cards = [
- ("🎓",T["study"],"Courses, research and learning","#e9e7ff","Study"),
- ("📚",T["canvas"],"Courses, assignments and grades","#e3f8f4","Canvas"),
- ("📈",T["trading"],"Markets, insights and strategy","#fff0e6","Trading"),
- ("📁",T["projects"],"Files, ideas and active projects","#e8efff","Projects")
-]
-cols=st.columns(4)
-for col,(emoji,title,desc,tint,key) in zip(cols,cards):
-    with col:
-        with st.container(border=True):
-            st.markdown(f'<div class="module-icon" style="background:{tint}">{emoji}</div><div class="module-title">{title}</div><div class="module-desc">{desc}</div>',unsafe_allow_html=True)
-            if st.button("Open workspace →",key=f"open_{key}",use_container_width=True):
-                st.session_state.section=key
-                st.rerun()
+st.title("🤖 My Assistant")
 
-st.markdown('<div class="section-eyebrow">Your assistant</div>',unsafe_allow_html=True)
-st.markdown(f"## 💬 {T['chat']}")
-uploaded_files=[]
-audio_input=None
-with st.expander("＋  Add files or a voice message"):
-    uploaded_files=st.file_uploader("Attach documents, images or audio",
-        type=["pdf","docx","xlsx","pptx","txt","csv","png","jpg","jpeg","webp","mp3","wav","m4a"],
-        accept_multiple_files=True)
-    if uploaded_files: st.caption(" · ".join(file.name for file in uploaded_files))
-    audio_input=st.audio_input("Record a voice message")
+st.markdown(f"### {T['welcome']}")
 
-voice_prompt=None
+st.caption(T["subtitle"])
+
+st.divider()
+
+c1, c2, c3, c4 = st.columns(4)
+
+with c1:
+    st.markdown("### 🎓")
+    st.markdown(f"**{T['study']}**")
+    st.caption("Courses and Research")
+
+with c2:
+    st.markdown("### 📚")
+    st.markdown(f"**{T['canvas']}**")
+    st.caption("Assignments and Courses")
+
+with c3:
+    st.markdown("### 📈")
+    st.markdown(f"**{T['trading']}**")
+    st.caption("Market Analysis")
+
+with c4:
+    st.markdown("### 📁")
+    st.markdown(f"**{T['projects']}**")
+    st.caption("Files and Projects")
+
+st.divider()
+
+# =====================================
+# 14. FILE UPLOAD
+# =====================================
+
+st.markdown(f"### 📎 {T['upload']}")
+
+uploaded_files = st.file_uploader(
+    "Upload your files and images",
+    type=[
+        "pdf", "docx",
+        "xlsx", "pptx",
+        "txt", "csv",
+        "png", "jpg", "jpeg", "webp",
+        "mp3", "wav", "m4a"
+    ],
+    accept_multiple_files=True
+)
+
+if uploaded_files:
+    for file in uploaded_files:
+        st.caption(f"Attached: {file.name}")
+
+# =====================================
+# 15. VOICE INPUT
+# =====================================
+
+st.markdown(f"### 🎙️ {T['voice']}")
+
+audio_input = st.audio_input(
+    "Record your voice message"
+)
+
+voice_prompt = None
+
 if audio_input:
     try:
-        voice_prompt=transcribe_audio(audio_input)
+        voice_prompt = transcribe_audio(audio_input)
         st.info(f"Recognized: {voice_prompt}")
-    except Exception as error: st.error(f"Voice error: {error}")
+    except Exception as error:
+        st.error(f"Voice error: {error}")
+
+# =====================================
+# 16. CHAT
+# =====================================
+
+st.divider()
+
+st.markdown(f"## 💬 {T['chat']}")
 
 for message in st.session_state.messages:
-    with st.chat_message(message["role"]): st.markdown(message["content"])
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-prompt=st.chat_input(T["placeholder"])
-if not prompt and voice_prompt: prompt=voice_prompt
+prompt = st.chat_input(T["placeholder"])
+
+if not prompt and voice_prompt:
+    prompt = voice_prompt
+
 if prompt:
-    st.session_state.messages.append({"role":"user","content":prompt})
-    with st.chat_message("user"): st.markdown(prompt)
+
+    if not selected_course:
+        st.error(T["no_course"])
+        st.stop()
+
+    st.session_state.messages.append({
+        "role": "user",
+        "content": prompt
+    })
+
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
     with st.chat_message("assistant"):
+
         try:
+
             with st.spinner(T["thinking"]):
-                answer=run_assistant(prompt,selected_course,uploaded_files)
+
+                answer = run_assistant(
+                    prompt,
+                    selected_course,
+                    uploaded_files
+                )
+
             st.markdown(answer)
+
             if st.session_state.voice_enabled:
                 try:
-                    speech=generate_speech(answer)
-                    st.audio(speech,format="audio/mp3")
-                except Exception as audio_error: st.warning(f"Voice response unavailable: {audio_error}")
-        except Exception as error:
-            answer=f"Assistant error: {error}"
-            st.error(answer)
-    st.session_state.messages.append({"role":"assistant","content":answer})
+                    speech = generate_speech(answer)
+                    st.audio(speech, format="audio/mp3")
+                except Exception as audio_error:
+                    st.warning(
+                        f"Voice response unavailable: {audio_error}"
+                    )
 
-with st.expander("Voice settings"):
-    st.session_state.voice_enabled=st.toggle("Enable spoken responses",value=st.session_state.voice_enabled)
-    st.caption("Recorded voice input and spoken replies are supported. Real-time continuous voice is a separate development stage.")
+        except Exception as error:
+
+            answer = f"Assistant error: {error}"
+            st.error(answer)
+
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": answer
+    })
+
+# =====================================
+# 17. VOICE SETTINGS
+# =====================================
+
+with st.expander("Voice Settings"):
+
+    st.session_state.voice_enabled = st.toggle(
+        "Enable spoken responses",
+        value=st.session_state.voice_enabled
+    )
+
+    st.caption(
+        "This version supports recorded voice input "
+        "and generated spoken replies. Continuous "
+        "real-time voice conversation is a separate "
+        "development stage."
+    )
+
+# =====================================
+# END
+# =====================================
