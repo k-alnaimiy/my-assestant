@@ -1,8 +1,8 @@
-
 import os
 import json
 import base64
 import io
+import uuid
 import requests
 import streamlit as st
 from dotenv import load_dotenv
@@ -11,17 +11,14 @@ from openai import OpenAI
 # =====================================
 # 1. CONFIGURATION
 # =====================================
-
 load_dotenv()
 
 def get_setting(name, default=""):
-    """Read Streamlit Cloud secrets first, then local environment variables."""
     try:
         value = st.secrets.get(name, None)
         if value is not None:
             return str(value)
     except Exception:
-        # st.secrets may be unavailable when running locally without secrets.toml.
         pass
     return os.getenv(name, default)
 
@@ -32,15 +29,12 @@ OPENAI_API_KEY = get_setting("OPENAI_API_KEY")
 st.set_page_config(
     page_title="My Assistant",
     page_icon="🤖",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 if not OPENAI_API_KEY:
     st.error("OpenAI API key is missing. Add OPENAI_API_KEY in Streamlit Secrets or your local .env file.")
-    st.stop()
-
-if not CANVAS_URL or not CANVAS_TOKEN:
-    st.error("Canvas settings are missing. Add CANVAS_API_URL and CANVAS_API_TOKEN in Streamlit Secrets or your local .env file.")
     st.stop()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -48,108 +42,154 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # =====================================
 # 2. SESSION STATE
 # =====================================
+def new_conversation():
+    return {
+        "id": str(uuid.uuid4()),
+        "title": "New chat",
+        "messages": [],
+    }
 
 defaults = {
-    "messages": [],
-    "courses": [],
     "language": "English",
-    "section": "Chat",
-    "voice_enabled": True
+    "section": "Home",
+    "conversations": [],
+    "active_conversation_id": None,
+    "courses": [],
+    "voice_enabled": True,
+    "projects": [],
+    "active_project_id": None,
 }
-
 for key, value in defaults.items():
     if key not in st.session_state:
         st.session_state[key] = value
 
+if not st.session_state.conversations:
+    first_chat = new_conversation()
+    st.session_state.conversations = [first_chat]
+    st.session_state.active_conversation_id = first_chat["id"]
+
+def get_active_conversation():
+    for conversation in st.session_state.conversations:
+        if conversation["id"] == st.session_state.active_conversation_id:
+            return conversation
+    conversation = new_conversation()
+    st.session_state.conversations.insert(0, conversation)
+    st.session_state.active_conversation_id = conversation["id"]
+    return conversation
+
+def start_new_chat():
+    conversation = new_conversation()
+    st.session_state.conversations.insert(0, conversation)
+    st.session_state.active_conversation_id = conversation["id"]
+    st.session_state.section = "Home"
+
 # =====================================
 # 3. LANGUAGE
 # =====================================
-
 LANGUAGES = {
     "English": {
         "welcome": "Welcome to My Assistant",
         "subtitle": "Your Personal AI Workspace",
-        "chat": "Chat with My Assistant",
         "study": "Study",
         "canvas": "Canvas",
         "trading": "Trading",
         "projects": "Projects",
-        "course": "Select a Canvas course",
+        "study_desc": "Courses and research",
+        "canvas_desc": "Courses and assignments",
+        "trading_desc": "Market analysis",
+        "projects_desc": "Your files and projects",
         "placeholder": "Ask me anything...",
-        "upload": "Upload Files & Images",
-        "voice": "Voice Message",
-        "connections": "Connections",
+        "send": "Send",
+        "upload": "Upload files and images",
         "thinking": "Thinking...",
-        "clear": "Clear Conversation"
+        "new_chat": "＋ New chat",
+        "history": "Your conversations",
+        "home": "Home",
+        "back": "← Home",
+        "choose_course": "Select a Canvas course",
+        "refresh_courses": "Refresh courses",
+        "no_courses": "No active Canvas courses were found.",
+        "canvas_setup": "Canvas connection is not configured. Add CANVAS_API_URL and CANVAS_API_TOKEN in Streamlit Secrets.",
+        "projects_title": "Your Projects",
+        "project_name": "New project name",
+        "add_project": "Add project",
+        "open_project": "Open",
+        "project_empty": "You have not created any projects yet.",
+        "voice_error": "Voice transcription error",
+        "voice_recognized": "Voice message transcribed",
+        "voice_settings": "Voice settings",
+        "spoken_replies": "Enable spoken responses",
+        "clear_chat": "Delete this conversation",
+        "language": "Language",
+        "connections_missing": "Canvas is not connected.",
     },
     "العربية": {
         "welcome": "مرحباً بك في مساعدك الشخصي",
         "subtitle": "مساحة العمل الذكية الخاصة بك",
-        "chat": "المحادثة",
         "study": "الدراسة",
         "canvas": "كانفس",
         "trading": "التداول",
         "projects": "المشاريع",
-        "course": "اختر المقرر",
+        "study_desc": "المقررات والأبحاث",
+        "canvas_desc": "المقررات والواجبات",
+        "trading_desc": "تحليل الأسواق",
+        "projects_desc": "ملفاتك ومشاريعك",
         "placeholder": "اكتب سؤالك هنا...",
+        "send": "إرسال",
         "upload": "رفع الملفات والصور",
-        "voice": "رسالة صوتية",
-        "connections": "الاتصالات",
         "thinking": "جاري التفكير...",
-        "clear": "مسح المحادثة"
-    }
+        "new_chat": "＋ محادثة جديدة",
+        "history": "المحادثات السابقة",
+        "home": "الرئيسية",
+        "back": "← الرئيسية",
+        "choose_course": "اختر مقرراً من Canvas",
+        "refresh_courses": "تحديث المقررات",
+        "no_courses": "لم يتم العثور على مقررات نشطة في Canvas.",
+        "canvas_setup": "إعدادات Canvas غير مكتملة. أضف CANVAS_API_URL و CANVAS_API_TOKEN إلى Streamlit Secrets.",
+        "projects_title": "مشاريعك",
+        "project_name": "اسم المشروع الجديد",
+        "add_project": "إضافة مشروع",
+        "open_project": "فتح",
+        "project_empty": "لم تقم بإنشاء مشاريع بعد.",
+        "voice_error": "حدث خطأ في تحويل الصوت إلى نص",
+        "voice_recognized": "تم تحويل الرسالة الصوتية إلى نص",
+        "voice_settings": "إعدادات الصوت",
+        "spoken_replies": "تفعيل الردود الصوتية",
+        "clear_chat": "حذف هذه المحادثة",
+        "language": "اللغة",
+        "connections_missing": "اتصال Canvas غير متوفر.",
+    },
 }
-
 T = LANGUAGES[st.session_state.language]
 
 # =====================================
-# 4. CANVAS CONNECTION
+# 4. CANVAS CONNECTION AND TOOLS
 # =====================================
-
-CANVAS_HEADERS = {
-    "Authorization": f"Bearer {CANVAS_TOKEN}"
-}
+CANVAS_HEADERS = {"Authorization": f"Bearer {CANVAS_TOKEN}"} if CANVAS_TOKEN else {}
 
 def canvas_get(endpoint, params=None):
+    if not CANVAS_URL or not CANVAS_TOKEN:
+        raise RuntimeError(T["canvas_setup"])
     response = requests.get(
         f"{CANVAS_URL}/api/v1/{endpoint}",
         headers=CANVAS_HEADERS,
         params=params,
-        timeout=30
+        timeout=30,
     )
     response.raise_for_status()
     return response.json()
 
-
 @st.cache_data(ttl=60)
 def get_courses():
-    return canvas_get(
-        "courses",
-        {
-            "enrollment_state": "active",
-            "per_page": 100
-        }
-    )
-
+    return canvas_get("courses", {"enrollment_state": "active", "per_page": 100})
 
 def get_modules(course_id):
-    return canvas_get(
-        f"courses/{course_id}/modules",
-        {"per_page": 100}
-    )
-
+    return canvas_get(f"courses/{course_id}/modules", {"per_page": 100})
 
 def get_pages(course_id):
-    return canvas_get(
-        f"courses/{course_id}/pages",
-        {"per_page": 100}
-    )
+    return canvas_get(f"courses/{course_id}/pages", {"per_page": 100})
 
-# =====================================
-# 5. CANVAS TOOLS
-# =====================================
-
-TOOLS = [
+CANVAS_TOOLS = [
     {
         "type": "function",
         "name": "get_course_modules",
@@ -158,9 +198,9 @@ TOOLS = [
             "type": "object",
             "properties": {},
             "required": [],
-            "additionalProperties": False
+            "additionalProperties": False,
         },
-        "strict": True
+        "strict": True,
     },
     {
         "type": "function",
@@ -170,175 +210,93 @@ TOOLS = [
             "type": "object",
             "properties": {},
             "required": [],
-            "additionalProperties": False
+            "additionalProperties": False,
         },
-        "strict": True
-    }
+        "strict": True,
+    },
 ]
 
 # =====================================
-# 6. DOCUMENT READER
+# 5. FILE AND VOICE HELPERS
 # =====================================
-
 def read_document(file):
-
     name = file.name.lower()
     data = file.getvalue()
-
     try:
-
         if name.endswith((".txt", ".csv")):
-            return data.decode(
-                "utf-8",
-                errors="replace"
-            )
-
+            return data.decode("utf-8", errors="replace")
         if name.endswith(".pdf"):
             from pypdf import PdfReader
-
             reader = PdfReader(io.BytesIO(data))
-
-            return "\n".join(
-                page.extract_text() or ""
-                for page in reader.pages
-            )
-
+            return "\n".join(page.extract_text() or "" for page in reader.pages)
         if name.endswith(".docx"):
             from docx import Document
-
             doc = Document(io.BytesIO(data))
-
-            return "\n".join(
-                p.text for p in doc.paragraphs
-            )
-
+            return "\n".join(p.text for p in doc.paragraphs)
         if name.endswith(".xlsx"):
             from openpyxl import load_workbook
-
-            workbook = load_workbook(
-                io.BytesIO(data),
-                read_only=True,
-                data_only=True
-            )
-
+            workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
             output = []
-
             for sheet in workbook.worksheets:
                 output.append(f"Sheet: {sheet.title}")
-
                 for row in sheet.iter_rows(values_only=True):
-                    output.append(
-                        " | ".join(
-                            str(v) if v is not None else ""
-                            for v in row
-                        )
-                    )
-
+                    output.append(" | ".join(str(v) if v is not None else "" for v in row))
             return "\n".join(output)
-
         if name.endswith(".pptx"):
             from pptx import Presentation
-
             presentation = Presentation(io.BytesIO(data))
-
             output = []
-
-            for number, slide in enumerate(
-                presentation.slides, 1
-            ):
+            for number, slide in enumerate(presentation.slides, 1):
                 output.append(f"Slide {number}")
-
                 for shape in slide.shapes:
                     if hasattr(shape, "text"):
                         output.append(shape.text)
-
             return "\n".join(output)
-
-        return (
-            "This file format needs conversion "
-            "or a dedicated reader."
-        )
-
+        return "This file format needs conversion or a dedicated reader."
     except Exception as error:
         return f"File reading error: {error}"
 
-# =====================================
-# 7. IMAGE SUPPORT
-# =====================================
-
 def prepare_images(files):
-
     images = []
-
     for file in files or []:
-
-        if file.type not in [
-            "image/png",
-            "image/jpeg",
-            "image/webp"
-        ]:
+        if file.type not in ["image/png", "image/jpeg", "image/webp"]:
             continue
-
-        encoded = base64.b64encode(
-            file.getvalue()
-        ).decode("utf-8")
-
+        encoded = base64.b64encode(file.getvalue()).decode("utf-8")
         images.append({
             "type": "input_image",
-            "image_url": (
-                f"data:{file.type};base64,{encoded}"
-            ),
-            "detail": "auto"
+            "image_url": f"data:{file.type};base64,{encoded}",
+            "detail": "auto",
         })
-
     return images
 
-# =====================================
-# 8. VOICE TRANSCRIPTION
-# =====================================
-
 def transcribe_audio(audio):
-
     audio.seek(0)
-
     result = client.audio.transcriptions.create(
         model="gpt-4o-mini-transcribe",
-        file=audio
+        file=audio,
     )
-
     return result.text
 
-# =====================================
-# 9. VOICE RESPONSE
-# =====================================
-
 def generate_speech(text):
-
     result = client.audio.speech.create(
         model="gpt-4o-mini-tts",
         voice="marin",
-        input=text
+        input=text,
     )
-
     return result.content
 
 # =====================================
-# 10. AI ENGINE
+# 6. AI ENGINE
 # =====================================
-
-def run_assistant(prompt, course, files):
-
-    course_id = course["id"]
-    course_name = course.get("name", "Selected course")
+def run_assistant(prompt, course, files, messages):
+    course_name = course.get("name", "No Canvas course selected") if course else "No Canvas course selected"
+    course_id = course.get("id") if course else None
 
     instructions = f"""
 You are My Assistant, a professional personal AI assistant.
-
-You are bilingual in Arabic and English.
-Respond in the language used by the user.
+You are bilingual in Arabic and English. Respond in the language used by the user.
 
 Your responsibilities include:
-
 - Academic studies and PhD research.
 - Digital Transformation.
 - Canvas course assistance.
@@ -347,457 +305,331 @@ Your responsibilities include:
 - Document and image analysis.
 - Writing and translation.
 
-Selected Canvas course:
-{course_name}
+Selected Canvas course: {course_name}
+Course ID: {course_id if course_id else "None"}
 
-Course ID:
-{course_id}
-
-You can retrieve Canvas modules and pages
-using the available tools.
-
+Canvas modules and pages tools are available only when a Canvas course is selected.
 Never claim an action succeeded unless it did.
-Never edit, delete, or publish Canvas content
-without explicit user approval.
+Never edit, delete, grade, or publish Canvas content without explicit user approval.
 """
 
     document_context = ""
     images = []
-
     for file in files or []:
-
         if file.type.startswith("image/"):
             images.extend(prepare_images([file]))
-
         elif file.type.startswith("audio/"):
             continue
-
         else:
-            content = read_document(file)
-
-            document_context += (
-                f"\n\nFILE: {file.name}\n"
-                f"{content}\n"
-            )
+            document_context += f"\n\nFILE: {file.name}\n{read_document(file)}\n"
 
     user_content = [{
         "type": "input_text",
-        "text": (
-            f"{prompt}\n\n"
-            f"Attached document contents:\n"
-            f"{document_context}"
-        )
+        "text": f"{prompt}\n\nAttached document contents:\n{document_context}",
     }]
-
     user_content.extend(images)
 
-    history = [
-        {
-            "role": message["role"],
-            "content": message["content"]
-        }
-        for message in st.session_state.messages
-    ]
+    history = [{"role": m["role"], "content": m["content"]} for m in messages]
+    history.append({"role": "user", "content": user_content})
 
-    history.append({
-        "role": "user",
-        "content": user_content
-    })
-
+    tools = CANVAS_TOOLS if course_id else []
     response = client.responses.create(
         model="gpt-5.5",
         instructions=instructions,
         input=history,
-        tools=TOOLS
+        tools=tools,
     )
 
     for _ in range(5):
-
-        calls = [
-            item for item in response.output
-            if item.type == "function_call"
-        ]
-
+        calls = [item for item in response.output if item.type == "function_call"]
         if not calls:
             break
-
         outputs = []
-
         for call in calls:
-
             try:
-
-                if call.name == "get_course_modules":
-
+                if not course_id:
+                    output = {"error": "No Canvas course selected."}
+                elif call.name == "get_course_modules":
                     result = get_modules(course_id)
-
-                    output = [
-                        {
-                            "id": item.get("id"),
-                            "name": item.get("name")
-                        }
-                        for item in result
-                    ]
-
+                    output = [{"id": item.get("id"), "name": item.get("name")} for item in result]
                 elif call.name == "get_course_pages":
-
                     result = get_pages(course_id)
-
-                    output = [
-                        {
-                            "title": item.get("title"),
-                            "url": item.get("url")
-                        }
-                        for item in result
-                    ]
-
+                    output = [{"title": item.get("title"), "url": item.get("url")} for item in result]
                 else:
                     output = {"error": "Unknown tool"}
-
             except Exception as error:
                 output = {"error": str(error)}
-
             outputs.append({
                 "type": "function_call_output",
                 "call_id": call.call_id,
-                "output": json.dumps(
-                    output,
-                    ensure_ascii=False
-                )
+                "output": json.dumps(output, ensure_ascii=False),
             })
-
         response = client.responses.create(
             model="gpt-5.5",
             instructions=instructions,
-            input=(
-                history
-                + list(response.output)
-                + outputs
-            ),
-            tools=TOOLS
+            input=history + list(response.output) + outputs,
+            tools=tools,
         )
-
     return response.output_text or "No response generated."
 
 # =====================================
-# 11. NEW INTERFACE
+# 7. INTERFACE STYLE
 # =====================================
-
 st.markdown("""
 <style>
-
-.stApp {
-    background: #F7F9FD;
-    color: #26344D;
-}
-
-.block-container {
-    max-width: 1450px;
-    padding-top: 2rem;
-}
-
+.stApp { background: #F7F9FD; color: #26344D; }
+.block-container { max-width: 1450px; padding-top: 1.5rem; }
 section[data-testid="stSidebar"] {
     background: #FFFFFF;
     border-right: 1px solid #E7ECF5;
 }
-
-h1, h2, h3 {
-    color: #263F68 !important;
-    font-weight: 700 !important;
-}
-
+h1, h2, h3 { color: #263F68 !important; font-weight: 700 !important; }
 .stButton > button {
-    background: #EEF4FF;
-    color: #315A9D;
-    border: 1px solid #DCE6F7;
-    border-radius: 12px;
-    min-height: 42px;
-    font-weight: 600;
+    background: #EEF4FF; color: #315A9D;
+    border: 1px solid #DCE6F7; border-radius: 12px;
+    min-height: 44px; font-weight: 600;
 }
-
-.stButton > button:hover {
-    background: #DDEAFF;
+.stButton > button:hover { background: #DDEAFF; border-color: #B8CDEE; }
+.stTextInput input { border-radius: 12px; }
+.stChatMessage {
+    background: white; border: 1px solid #E7ECF5;
+    border-radius: 16px; padding: 14px;
 }
-
-.stChatInput textarea {
-    background: white;
-    border-radius: 14px;
-}
-
-[data-testid="stChatMessage"] {
-    background: white;
-    border: 1px solid #E7ECF5;
-    border-radius: 16px;
-    padding: 16px;
-    margin-bottom: 12px;
-}
-
 [data-testid="stFileUploader"] {
-    background: white;
-    border: 1px dashed #B9CBE9;
-    border-radius: 14px;
-    padding: 12px;
+    background: white; border: 1px dashed #B9CBE9;
+    border-radius: 14px; padding: 10px;
 }
-
 </style>
 """, unsafe_allow_html=True)
 
 # =====================================
-# 12. SIDEBAR
+# 8. SIDEBAR: LANGUAGE + CHAT HISTORY
 # =====================================
-
 with st.sidebar:
-
     st.markdown("# 🤖 My Assistant")
-
     st.caption("Your Personal AI Workspace")
-
     st.divider()
 
     language = st.selectbox(
-        "Language",
+        T["language"],
         ["English", "العربية"],
-        index=(
-            0 if st.session_state.language == "English"
-            else 1
-        )
+        index=0 if st.session_state.language == "English" else 1,
+        key="language_selector",
     )
-
     if language != st.session_state.language:
         st.session_state.language = language
         st.rerun()
 
     st.divider()
 
-    st.markdown("### Workspace")
-
-    section = st.radio(
-        "Navigation",
-        [
-            "Chat",
-            "Study",
-            "Canvas",
-            "Trading",
-            "Projects"
-        ],
-        label_visibility="collapsed"
-    )
-
-    st.session_state.section = section
-
-    st.divider()
-
-    st.markdown("### Canvas Courses")
-
-    if st.button(
-        "Refresh Courses",
-        use_container_width=True
-    ):
-        try:
-            st.cache_data.clear()
-            st.session_state.courses = get_courses()
-            st.success("Courses refreshed")
-        except Exception as error:
-            st.error(str(error))
-
-    if not st.session_state.courses:
-        try:
-            st.session_state.courses = get_courses()
-        except Exception as error:
-            st.error(f"Canvas error: {error}")
-
-    courses = st.session_state.courses
-    selected_course = None
-
-    if courses:
-
-        course_map = {
-            f"{c.get('name', 'Unnamed')} (ID: {c['id']})": c
-            for c in courses
-        }
-
-        selected_name = st.selectbox(
-            T["course"],
-            list(course_map.keys())
-        )
-
-        selected_course = course_map[selected_name]
-
-    st.divider()
-
-    st.markdown("### Connections")
-
-    st.success("OpenAI API")
-    st.success("Canvas API")
-
-    st.divider()
-
-    if st.button(
-        T["clear"],
-        use_container_width=True
-    ):
-        st.session_state.messages = []
+    if st.button(T["new_chat"], use_container_width=True, type="primary"):
+        start_new_chat()
         st.rerun()
 
-# =====================================
-# 13. MAIN DASHBOARD
-# =====================================
+    st.markdown(f"### {T['history']}")
+    for conversation in st.session_state.conversations:
+        title = conversation["title"] or "New chat"
+        is_active = conversation["id"] == st.session_state.active_conversation_id
+        label = ("● " if is_active else "") + title[:34]
+        if st.button(label, key=f"conversation_{conversation['id']}", use_container_width=True):
+            st.session_state.active_conversation_id = conversation["id"]
+            st.session_state.section = "Home"
+            st.rerun()
 
-st.title("🤖 My Assistant")
-
-st.markdown(f"### {T['welcome']}")
-
-st.caption(T["subtitle"])
-
-st.divider()
-
-c1, c2, c3, c4 = st.columns(4)
-
-with c1:
-    st.markdown("### 🎓")
-    st.markdown(f"**{T['study']}**")
-    st.caption("Courses and Research")
-
-with c2:
-    st.markdown("### 📚")
-    st.markdown(f"**{T['canvas']}**")
-    st.caption("Assignments and Courses")
-
-with c3:
-    st.markdown("### 📈")
-    st.markdown(f"**{T['trading']}**")
-    st.caption("Market Analysis")
-
-with c4:
-    st.markdown("### 📁")
-    st.markdown(f"**{T['projects']}**")
-    st.caption("Files and Projects")
-
-st.divider()
+# Refresh language dictionary after any language selection rerun.
+T = LANGUAGES[st.session_state.language]
+active_conversation = get_active_conversation()
 
 # =====================================
-# 14. FILE UPLOAD
+# 9. HOME DASHBOARD / SECTION NAVIGATION
 # =====================================
+if st.session_state.section == "Home":
+    st.title("🤖 My Assistant")
+    st.markdown(f"### {T['welcome']}")
+    st.caption(T["subtitle"])
+    st.divider()
 
-st.markdown(f"### 📎 {T['upload']}")
+    columns = st.columns(4)
+    cards = [
+        ("Study", "🎓", T["study"], T["study_desc"]),
+        ("Canvas", "📚", T["canvas"], T["canvas_desc"]),
+        ("Trading", "📈", T["trading"], T["trading_desc"]),
+        ("Projects", "📁", T["projects"], T["projects_desc"]),
+    ]
+    for column, (section_key, icon, label, description) in zip(columns, cards):
+        with column:
+            st.markdown(
+                f"""<div style="background:white;border:1px solid #E2EAF5;
+                border-radius:16px;padding:22px 14px;text-align:center;
+                min-height:130px;">
+                <div style="font-size:34px">{icon}</div>
+                <div style="font-size:18px;font-weight:700;color:#263F68">{label}</div>
+                <div style="font-size:13px;color:#718096">{description}</div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+            if st.button(label, key=f"open_{section_key}", use_container_width=True):
+                st.session_state.section = section_key
+                st.rerun()
+    st.divider()
 
-uploaded_files = st.file_uploader(
-    "Upload your files and images",
-    type=[
-        "pdf", "docx",
-        "xlsx", "pptx",
-        "txt", "csv",
-        "png", "jpg", "jpeg", "webp",
-        "mp3", "wav", "m4a"
-    ],
-    accept_multiple_files=True
-)
-
-if uploaded_files:
-    for file in uploaded_files:
-        st.caption(f"Attached: {file.name}")
+else:
+    if st.button(T["back"]):
+        st.session_state.section = "Home"
+        st.rerun()
+    section_titles = {
+        "Study": T["study"],
+        "Canvas": T["canvas"],
+        "Trading": T["trading"],
+        "Projects": T["projects"],
+    }
+    st.title(section_titles.get(st.session_state.section, "My Assistant"))
 
 # =====================================
-# 15. VOICE INPUT
+# 10. PROJECTS SECTION
 # =====================================
+selected_course = None
+if st.session_state.section == "Projects":
+    st.subheader(T["projects_title"])
+    with st.form("add_project_form", clear_on_submit=True):
+        project_name = st.text_input(T["project_name"])
+        add_project = st.form_submit_button(T["add_project"], use_container_width=True)
+    if add_project and project_name.strip():
+        st.session_state.projects.append({
+            "id": str(uuid.uuid4()),
+            "name": project_name.strip(),
+        })
+        st.rerun()
 
-st.markdown(f"### 🎙️ {T['voice']}")
+    if not st.session_state.projects:
+        st.info(T["project_empty"])
+    else:
+        project_columns = st.columns(3)
+        for index, project in enumerate(st.session_state.projects):
+            with project_columns[index % 3]:
+                st.markdown(f"**📁 {project['name']}**")
+                if st.button(T["open_project"], key=f"project_{project['id']}"):
+                    st.session_state.active_project_id = project["id"]
+                    st.session_state.section = "Project Chat"
+                    st.rerun()
 
-audio_input = st.audio_input(
-    "Record your voice message"
-)
-
-voice_prompt = None
-
-if audio_input:
-    try:
-        voice_prompt = transcribe_audio(audio_input)
-        st.info(f"Recognized: {voice_prompt}")
-    except Exception as error:
-        st.error(f"Voice error: {error}")
+if st.session_state.section == "Project Chat":
+    project = next(
+        (p for p in st.session_state.projects if p["id"] == st.session_state.active_project_id),
+        None,
+    )
+    if project:
+        st.subheader(f"📁 {project['name']}")
+        st.info("This project workspace is ready. Project-specific files and conversations can be added in a later step.")
 
 # =====================================
-# 16. CHAT
+# 11. CANVAS SECTION: COURSE SELECTION
 # =====================================
+if st.session_state.section == "Canvas":
+    if not CANVAS_URL or not CANVAS_TOKEN:
+        st.warning(T["canvas_setup"])
+    else:
+        course_col, refresh_col = st.columns([5, 1])
+        with refresh_col:
+            if st.button(T["refresh_courses"], use_container_width=True):
+                get_courses.clear()
+                st.session_state.courses = get_courses()
+        if not st.session_state.courses:
+            try:
+                st.session_state.courses = get_courses()
+            except Exception as error:
+                st.error(f"Canvas error: {error}")
+        if st.session_state.courses:
+            course_map = {
+                f"{course.get('name', 'Unnamed')} (ID: {course['id']})": course
+                for course in st.session_state.courses
+            }
+            with course_col:
+                selected_name = st.selectbox(T["choose_course"], list(course_map.keys()))
+            selected_course = course_map[selected_name]
+        else:
+            st.info(T["no_courses"])
 
-st.divider()
+# =====================================
+# 12. CHAT, FILES AND VOICE
+# =====================================
+show_chat = st.session_state.section in ["Home", "Study", "Canvas", "Trading", "Project Chat"]
 
-st.markdown(f"## 💬 {T['chat']}")
+if show_chat:
+    st.divider()
+    st.subheader("💬 " + ("Chat with My Assistant" if st.session_state.language == "English" else "المحادثة مع مساعدك"))
 
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+    for message in active_conversation["messages"]:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
-prompt = st.chat_input(T["placeholder"])
+    uploaded_files = st.file_uploader(
+        T["upload"],
+        type=["pdf", "docx", "xlsx", "pptx", "txt", "csv", "png", "jpg", "jpeg", "webp", "mp3", "wav", "m4a"],
+        accept_multiple_files=True,
+        key=f"upload_{active_conversation['id']}",
+    )
+    if uploaded_files:
+        for file in uploaded_files:
+            st.caption(f"📎 {file.name}")
 
-if not prompt and voice_prompt:
-    prompt = voice_prompt
+    input_col, mic_col, send_col = st.columns([7, 1, 1], vertical_alignment="bottom")
+    with input_col:
+        typed_prompt = st.text_input(
+            T["placeholder"],
+            key=f"prompt_{active_conversation['id']}",
+            label_visibility="collapsed",
+        )
+    with mic_col:
+        audio_input = st.audio_input("🎙️", label_visibility="collapsed")
+    with send_col:
+        send_clicked = st.button(T["send"], use_container_width=True)
 
-if prompt:
+    if send_clicked:
+        prompt = typed_prompt.strip()
+        if audio_input:
+            try:
+                spoken_text = transcribe_audio(audio_input)
+                if prompt:
+                    prompt = f"{prompt}\n\n{spoken_text}"
+                else:
+                    prompt = spoken_text
+            except Exception as error:
+                st.error(f"{T['voice_error']}: {error}")
+                prompt = ""
 
-    if not selected_course:
-        st.error(T["no_course"])
-        st.stop()
-
-    st.session_state.messages.append({
-        "role": "user",
-        "content": prompt
-    })
-
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    with st.chat_message("assistant"):
-
-        try:
+        if prompt:
+            active_conversation["messages"].append({"role": "user", "content": prompt})
+            if active_conversation["title"] == "New chat":
+                active_conversation["title"] = prompt[:36] + ("…" if len(prompt) > 36 else "")
 
             with st.spinner(T["thinking"]):
-
-                answer = run_assistant(
-                    prompt,
-                    selected_course,
-                    uploaded_files
-                )
-
-            st.markdown(answer)
-
-            if st.session_state.voice_enabled:
                 try:
-                    speech = generate_speech(answer)
-                    st.audio(speech, format="audio/mp3")
-                except Exception as audio_error:
-                    st.warning(
-                        f"Voice response unavailable: {audio_error}"
+                    answer = run_assistant(
+                        prompt,
+                        selected_course,
+                        uploaded_files,
+                        active_conversation["messages"][:-1],
                     )
+                except Exception as error:
+                    answer = f"Assistant error: {error}"
 
-        except Exception as error:
+            active_conversation["messages"].append({"role": "assistant", "content": answer})
+            st.rerun()
 
-            answer = f"Assistant error: {error}"
-            st.error(answer)
+    with st.expander(T["voice_settings"]):
+        st.session_state.voice_enabled = st.toggle(
+            T["spoken_replies"],
+            value=st.session_state.voice_enabled,
+        )
+        if active_conversation["messages"] and st.session_state.voice_enabled:
+            last_answer = next(
+                (m["content"] for m in reversed(active_conversation["messages"]) if m["role"] == "assistant"),
+                None,
+            )
+            if last_answer and st.button("🔊 Play latest reply", key=f"play_{active_conversation['id']}"):
+                try:
+                    st.audio(generate_speech(last_answer), format="audio/mp3")
+                except Exception as error:
+                    st.warning(f"Voice response unavailable: {error}")
 
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": answer
-    })
-
-# =====================================
-# 17. VOICE SETTINGS
-# =====================================
-
-with st.expander("Voice Settings"):
-
-    st.session_state.voice_enabled = st.toggle(
-        "Enable spoken responses",
-        value=st.session_state.voice_enabled
-    )
-
-    st.caption(
-        "This version supports recorded voice input "
-        "and generated spoken replies. Continuous "
-        "real-time voice conversation is a separate "
-        "development stage."
-    )
-
-# =====================================
-# END
-# =====================================
