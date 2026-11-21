@@ -14,9 +14,19 @@ from openai import OpenAI
 
 load_dotenv()
 
-CANVAS_URL = os.getenv("CANVAS_API_URL", "").rstrip("/")
-CANVAS_TOKEN = os.getenv("CANVAS_API_TOKEN", "")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+def get_setting(name: str, default: str = "") -> str:
+    """Read credentials locally from .env or from Streamlit Cloud secrets."""
+    try:
+        value = st.secrets.get(name, default)
+        if value not in (None, ""):
+            return str(value)
+    except Exception:
+        pass
+    return os.getenv(name, default)
+
+CANVAS_URL = get_setting("CANVAS_API_URL").rstrip("/")
+CANVAS_TOKEN = get_setting("CANVAS_API_TOKEN")
+OPENAI_API_KEY = get_setting("OPENAI_API_KEY")
 
 st.set_page_config(
     page_title="My Assistant",
@@ -25,12 +35,13 @@ st.set_page_config(
 )
 
 if not OPENAI_API_KEY:
-    st.error("OpenAI API key is missing from .env")
+    st.error("OpenAI API key is missing. Add OPENAI_API_KEY in Streamlit Secrets or local .env.")
     st.stop()
 
-if not CANVAS_URL or not CANVAS_TOKEN:
-    st.error("Canvas settings are missing from .env")
-    st.stop()
+# Canvas is optional: general chat, study, trading and projects can work
+# without a Canvas connection. Canvas features become available when both
+# Canvas settings are configured in Streamlit Secrets or the local .env.
+CANVAS_CONNECTED = bool(CANVAS_URL and CANVAS_TOKEN)
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -112,6 +123,8 @@ def canvas_get(endpoint, params=None):
 
 @st.cache_data(ttl=60)
 def get_courses():
+    if not CANVAS_CONNECTED:
+        return []
     return canvas_get(
         "courses",
         {
@@ -317,8 +330,9 @@ def generate_speech(text):
 
 def run_assistant(prompt, course, files):
 
-    course_id = course["id"]
-    course_name = course.get("name", "Selected course")
+    course_id = course["id"] if course else None
+    course_name = course.get("name", "Selected course") if course else "No Canvas course selected"
+    available_tools = TOOLS if course else []
 
     instructions = f"""
 You are My Assistant, a professional personal AI assistant.
@@ -340,10 +354,10 @@ Selected Canvas course:
 {course_name}
 
 Course ID:
-{course_id}
+{course_id if course_id is not None else "Not selected"}
 
-You can retrieve Canvas modules and pages
-using the available tools.
+When a Canvas course is selected, you can retrieve its modules and pages.
+When no course is selected, answer general questions normally and do not claim to access Canvas.
 
 Never claim an action succeeded unless it did.
 Never edit, delete, or publish Canvas content
@@ -397,7 +411,7 @@ without explicit user approval.
         model="gpt-5.5",
         instructions=instructions,
         input=history,
-        tools=TOOLS
+        tools=available_tools
     )
 
     for _ in range(5):
@@ -418,7 +432,7 @@ without explicit user approval.
 
                 if call.name == "get_course_modules":
 
-                    result = get_modules(course_id)
+                    result = get_modules(course_id) if course_id is not None else []
 
                     output = [
                         {
@@ -430,7 +444,7 @@ without explicit user approval.
 
                 elif call.name == "get_course_pages":
 
-                    result = get_pages(course_id)
+                    result = get_pages(course_id) if course_id is not None else []
 
                     output = [
                         {
@@ -463,7 +477,7 @@ without explicit user approval.
                 + list(response.output)
                 + outputs
             ),
-            tools=TOOLS
+            tools=available_tools
         )
 
     return response.output_text or "No response generated."
@@ -533,11 +547,13 @@ with st.sidebar:
             st.success("Courses refreshed")
         except Exception as error:
             st.error(str(error))
-    if not st.session_state.courses:
+    if not CANVAS_CONNECTED:
+        st.caption("Canvas is not connected yet. Add Canvas settings in Streamlit Secrets to enable it.")
+    elif not st.session_state.courses:
         try:
             st.session_state.courses = get_courses()
         except Exception as error:
-            st.error(f"Canvas connection: {error}")
+            st.warning(f"Canvas connection: {error}")
     courses = st.session_state.courses
     selected_course = None
     if courses:
@@ -547,7 +563,8 @@ with st.sidebar:
     else:
         st.caption("No active courses found.")
     st.markdown('<div class="side-label">Connections</div>', unsafe_allow_html=True)
-    st.markdown("🟢 OpenAI API<br>🟢 Canvas API", unsafe_allow_html=True)
+    canvas_status = "🟢 Canvas API" if CANVAS_CONNECTED else "⚪ Canvas not configured"
+    st.markdown(f"🟢 OpenAI API<br>{canvas_status}", unsafe_allow_html=True)
     if st.button(T["clear"], use_container_width=True):
         st.session_state.messages = []
         st.rerun()
@@ -597,9 +614,6 @@ for message in st.session_state.messages:
 prompt=st.chat_input(T["placeholder"])
 if not prompt and voice_prompt: prompt=voice_prompt
 if prompt:
-    if not selected_course:
-        st.error(T.get("no_course","Please select an active Canvas course first."))
-        st.stop()
     st.session_state.messages.append({"role":"user","content":prompt})
     with st.chat_message("user"): st.markdown(prompt)
     with st.chat_message("assistant"):
