@@ -186,18 +186,33 @@ def get_courses():
 def get_modules(course_id):
     return canvas_get(f"courses/{course_id}/modules", {"per_page": 100})
 
+
 def get_pages(course_id):
     return canvas_get(f"courses/{course_id}/pages", {"per_page": 100})
 
+
+# Tool schemas are independent of the currently selected UI section/course.
 CANVAS_TOOLS = [
     {
         "type": "function",
-        "name": "get_course_modules",
-        "description": "Get modules from the selected Canvas course.",
+        "name": "list_canvas_courses",
+        "description": "List the active Canvas courses available to the connected user.",
         "parameters": {
             "type": "object",
             "properties": {},
             "required": [],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "get_course_modules",
+        "description": "Retrieve modules for a Canvas course. First identify the course ID using list_canvas_courses if needed.",
+        "parameters": {
+            "type": "object",
+            "properties": {"course_id": {"type": "string"}},
+            "required": ["course_id"],
             "additionalProperties": False,
         },
         "strict": True,
@@ -205,16 +220,52 @@ CANVAS_TOOLS = [
     {
         "type": "function",
         "name": "get_course_pages",
-        "description": "Get pages from the selected Canvas course.",
+        "description": "Retrieve pages for a Canvas course. First identify the course ID using list_canvas_courses if needed.",
         "parameters": {
             "type": "object",
-            "properties": {},
-            "required": [],
+            "properties": {"course_id": {"type": "string"}},
+            "required": ["course_id"],
             "additionalProperties": False,
         },
         "strict": True,
     },
 ]
+
+
+def execute_canvas_tool(name, arguments):
+    """Central, allow-listed executor for read-only Canvas tools."""
+    if name == "list_canvas_courses":
+        courses = get_courses()
+        return [
+            {
+                "id": str(course.get("id")),
+                "name": course.get("name"),
+                "course_code": course.get("course_code"),
+                "workflow_state": course.get("workflow_state"),
+            }
+            for course in courses
+        ]
+
+    course_id = str(arguments.get("course_id", "")).strip()
+    if not course_id.isdigit():
+        raise ValueError("A valid numeric Canvas course_id is required.")
+
+    if name == "get_course_modules":
+        result = get_modules(course_id)
+        return [
+            {"id": item.get("id"), "name": item.get("name")}
+            for item in result
+        ]
+
+    if name == "get_course_pages":
+        result = get_pages(course_id)
+        return [
+            {"title": item.get("title"), "url": item.get("url")}
+            for item in result
+        ]
+
+    raise ValueError(f"Tool is not allow-listed: {name}")
+
 
 # =====================================
 # 5. FILE AND VOICE HELPERS
@@ -289,28 +340,48 @@ def generate_speech(text):
 # 6. AI ENGINE
 # =====================================
 def run_assistant(prompt, course, files, messages):
-    course_name = course.get("name", "No Canvas course selected") if course else "No Canvas course selected"
-    course_id = course.get("id") if course else None
+    course_context = ""
+    if course:
+        course_context = (
+            f"\nThe user currently has Canvas course selected: "
+            f"{course.get('name', 'Unnamed')} (ID: {course.get('id')})."
+        )
+
+    canvas_available = bool(CANVAS_URL and CANVAS_TOKEN)
+    tools = CANVAS_TOOLS if canvas_available else []
 
     instructions = f"""
-You are My Assistant, a professional personal AI assistant.
-You are bilingual in Arabic and English. Respond in the language used by the user.
+You are My Assistant, a bilingual general-purpose task assistant.
+Respond in the same language as the user.
 
-Your responsibilities include:
-- Academic studies and PhD research.
-- Digital Transformation.
-- Canvas course assistance.
-- Trading education and market analysis.
-- Project management.
-- Document and image analysis.
-- Writing and translation.
+Your responsibilities include academic study and PhD research, digital
+transformation, Canvas support, trading education and analysis, project
+management, document/image analysis, writing, and research.
 
-Selected Canvas course: {course_name}
-Course ID: {course_id if course_id else "None"}
+You are an agent: understand the requested outcome, decide which available
+tools are needed, use them in a sensible sequence, inspect their results,
+and then report what was actually completed. Do not claim that an action
+succeeded unless a tool result confirms it.
 
-Canvas modules and pages tools are available only when a Canvas course is selected.
-Never claim an action succeeded unless it did.
-Never edit, delete, grade, or publish Canvas content without explicit user approval.
+Available integrations:
+- OpenAI model and document/image input.
+- Canvas read-only API tools, when configured.
+{course_context}
+
+Canvas tools currently available:
+- list_canvas_courses: discover active courses accessible to the connected user.
+- get_course_modules: read modules for a specified course ID.
+- get_course_pages: read pages for a specified course ID.
+
+Canvas tools are read-only. Do not claim to grade, edit, delete, publish,
+change attendance, or sync Banner data. Those capabilities are not connected.
+If a course is unclear, list the available courses and ask the user to identify
+the intended course. Never guess a course.
+
+When an action would change external data, explain the proposed action and
+request explicit approval before attempting it. If the required tool or
+permission is unavailable, state exactly what is missing and continue with
+independent work where possible.
 """
 
     document_context = ""
@@ -332,7 +403,6 @@ Never edit, delete, grade, or publish Canvas content without explicit user appro
     history = [{"role": m["role"], "content": m["content"]} for m in messages]
     history.append({"role": "user", "content": user_content})
 
-    tools = CANVAS_TOOLS if course_id else []
     response = client.responses.create(
         model="gpt-5.5",
         instructions=instructions,
@@ -340,37 +410,49 @@ Never edit, delete, grade, or publish Canvas content without explicit user appro
         tools=tools,
     )
 
-    for _ in range(5):
+    # Agent loop: execute only explicitly registered tools; stop safely on errors.
+    max_tool_rounds = 12
+    for _ in range(max_tool_rounds):
         calls = [item for item in response.output if item.type == "function_call"]
         if not calls:
             break
+
         outputs = []
         for call in calls:
             try:
-                if not course_id:
-                    output = {"error": "No Canvas course selected."}
-                elif call.name == "get_course_modules":
-                    result = get_modules(course_id)
-                    output = [{"id": item.get("id"), "name": item.get("name")} for item in result]
-                elif call.name == "get_course_pages":
-                    result = get_pages(course_id)
-                    output = [{"title": item.get("title"), "url": item.get("url")} for item in result]
-                else:
-                    output = {"error": "Unknown tool"}
+                arguments = json.loads(call.arguments or "{}")
+                result = execute_canvas_tool(call.name, arguments)
+                tool_output = {"ok": True, "result": result}
             except Exception as error:
-                output = {"error": str(error)}
+                tool_output = {
+                    "ok": False,
+                    "error": f"{type(error).__name__}: {error}",
+                }
+
             outputs.append({
                 "type": "function_call_output",
                 "call_id": call.call_id,
-                "output": json.dumps(output, ensure_ascii=False),
+                "output": json.dumps(tool_output, ensure_ascii=False),
             })
+
         response = client.responses.create(
             model="gpt-5.5",
             instructions=instructions,
             input=history + list(response.output) + outputs,
             tools=tools,
         )
+
+    remaining_calls = [
+        item for item in response.output if item.type == "function_call"
+    ]
+    if remaining_calls:
+        return (
+            "I reached the safe tool-execution limit for this request. "
+            "The task may be incomplete; please ask me to continue."
+        )
+
     return response.output_text or "No response generated."
+
 
 # =====================================
 # 7. INTERFACE STYLE
@@ -526,6 +608,10 @@ if st.session_state.section == "Project Chat":
 # 11. CANVAS SECTION: COURSE SELECTION
 # =====================================
 if st.session_state.section == "Canvas":
+    st.caption(
+        "Connected capabilities: course discovery, module reading, and page reading. "
+        "This build does not yet grade, edit Canvas content, or connect to Banner."
+    )
     if not CANVAS_URL or not CANVAS_TOKEN:
         st.warning(T["canvas_setup"])
     else:
