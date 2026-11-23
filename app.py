@@ -51,49 +51,6 @@ for key, value in defaults.items():
         st.session_state[key] = value
 
 # =====================================
-# 3. LANGUAGE
-# =====================================
-
-LANGUAGES = {
-    "English": {
-        "welcome": "Welcome to Canvas Assistant",
-        "subtitle": "Your Personal AI Workspace",
-        "chat": "Chat with Canvas Assistant",
-        "study": "Study",
-        "canvas": "Canvas",
-        "trading": "Trading",
-        "projects": "Projects",
-        "course": "Select a Canvas course",
-        "placeholder": "Ask me anything...",
-        "upload": "Upload Files & Images",
-        "voice": "Voice Message",
-        "connections": "Connections",
-        "thinking": "Thinking...",
-        "clear": "Clear Conversation",
-        "no_course": "Please select an active Canvas course first."
-    },
-    "العربية": {
-        "welcome": "مرحباً بك في مساعد كانفس",
-        "subtitle": "مساحة العمل الذكية الخاصة بك",
-        "chat": "المحادثة مع مساعد كانفس",
-        "study": "الدراسة",
-        "canvas": "كانفس",
-        "trading": "التداول",
-        "projects": "المشاريع",
-        "course": "اختر المقرر",
-        "placeholder": "اكتب سؤالك هنا...",
-        "upload": "رفع الملفات والصور",
-        "voice": "رسالة صوتية",
-        "connections": "الاتصالات",
-        "thinking": "جاري التفكير...",
-        "clear": "مسح المحادثة",
-        "no_course": "يرجى اختيار مقرر نشط من Canvas أولاً."
-    }
-}
-
-T = LANGUAGES[st.session_state.language]
-
-# =====================================
 # 4. CANVAS CONNECTION
 # =====================================
 
@@ -135,37 +92,6 @@ def get_pages(course_id):
         f"courses/{course_id}/pages",
         {"per_page": 100}
     )
-
-# =====================================
-# 5. CANVAS TOOLS
-# =====================================
-
-TOOLS = [
-    {
-        "type": "function",
-        "name": "get_course_modules",
-        "description": "Get modules from the selected Canvas course.",
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-            "additionalProperties": False
-        },
-        "strict": True
-    },
-    {
-        "type": "function",
-        "name": "get_course_pages",
-        "description": "Get pages from the selected Canvas course.",
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-            "additionalProperties": False
-        },
-        "strict": True
-    }
-]
 
 # =====================================
 # 6. DOCUMENT READER
@@ -314,200 +240,224 @@ def generate_speech(text):
     return result.content
 
 # =====================================
-# 10. AI ENGINE
+# 10. CANVAS ASSISTANT ENGINE
 # =====================================
 
+CANVAS_TOOLS = [
+    {
+        "type": "function",
+        "name": "get_course_modules",
+        "description": "Get modules from the Canvas course currently selected by the user.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False
+        },
+        "strict": True
+    },
+    {
+        "type": "function",
+        "name": "get_course_pages",
+        "description": "Get pages from the Canvas course currently selected by the user.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False
+        },
+        "strict": True
+    }
+]
+
+
 def run_assistant(prompt, course=None, files=None):
-
     course_id = course.get("id") if course else None
-    course_name = course.get("name", "No course selected") if course else "No course selected"
+    course_name = course.get("name", "Selected course") if course else None
 
-    instructions = f"""
-You are Canvas Assistant, a professional Canvas support assistant for an authorized university staff member.
+    instructions = """
+You are Canvas Assistant, a professional bilingual assistant for Canvas LMS support.
+Respond in the same language used by the user (Arabic or English).
+Your scope is Canvas LMS, course administration guidance, learning management workflows,
+Canvas troubleshooting, and analysis of documents, images, and files supplied by the user.
+Do not offer trading or unrelated personal-workspace features.
 
-You are bilingual in Arabic and English.
-Respond in the language used by the user.
+If a Canvas course is selected, you may use the available tools to read that course's
+modules and pages. If no course is selected, answer general questions normally and do not
+attempt course-specific tool calls. Explain when a request needs a course selection.
 
-Your responsibilities are limited to Canvas support, administration guidance, course information, modules, pages, assignments, quizzes, grades, students, instructors, and Canvas-related documents. Do not claim access to data or actions unless an available Canvas API tool actually provides it.
-
-Selected Canvas course:
-{course_name}
-
-Course ID:
-{course_id}
-
-You can retrieve Canvas modules and pages
-using the available tools.
-
-Never claim an action succeeded unless it did.
-Never edit, delete, grade, or publish Canvas content without explicit user approval. Never claim that the user is a student or administrator based only on a course list.
+Important safety rules:
+- Never claim that a Canvas action succeeded unless the API actually confirmed it.
+- The current app has read-only tools for course modules and pages only.
+- Do not claim to change grades, edit, delete, publish, message users, or modify Canvas data.
+- Never request or reveal API tokens, passwords, or secrets.
+- Ask for explicit confirmation before any future action that changes Canvas data.
+- Be transparent about missing permissions or unavailable data.
 """
+
+    if course:
+        instructions += f"\nCurrently selected Canvas course: {course_name} (ID: {course_id})."
+        tools = CANVAS_TOOLS
+    else:
+        instructions += "\nNo Canvas course is currently selected."
+        tools = []
 
     document_context = ""
     images = []
-
     for file in files or []:
-
         if file.type.startswith("image/"):
             images.extend(prepare_images([file]))
-
         elif file.type.startswith("audio/"):
             continue
-
         else:
             content = read_document(file)
-
-            document_context += (
-                f"\n\nFILE: {file.name}\n"
-                f"{content}\n"
-            )
+            document_context += f"\n\nFILE: {file.name}\n{content}\n"
 
     user_content = [{
         "type": "input_text",
-        "text": (
-            f"{prompt}\n\n"
-            f"Attached document contents:\n"
-            f"{document_context}"
-        )
+        "text": f"{prompt}\n\nAttached document contents:\n{document_context}"
     }]
-
     user_content.extend(images)
 
     history = [
-        {
-            "role": message["role"],
-            "content": message["content"]
-        }
+        {"role": message["role"], "content": message["content"]}
         for message in st.session_state.messages
     ]
-
-    # Replace the current plain-text prompt with its enriched version.
+    # The current prompt is already in session history as plain text.
+    # Replace it with the enriched content containing uploaded files/images.
     if history and history[-1]["role"] == "user" and history[-1]["content"] == prompt:
         history.pop()
-
-    history.append({
-        "role": "user",
-        "content": user_content
-    })
+    history.append({"role": "user", "content": user_content})
 
     response = client.responses.create(
         model="gpt-5.5",
         instructions=instructions,
         input=history,
-        tools=TOOLS
+        tools=tools
     )
 
     for _ in range(5):
-
-        calls = [
-            item for item in response.output
-            if item.type == "function_call"
-        ]
-
+        calls = [item for item in response.output if item.type == "function_call"]
         if not calls:
             break
 
         outputs = []
-
         for call in calls:
-
             try:
-
-                if call.name == "get_course_modules":
-
-                    if not course_id:
-                        output = {"error": "Select a Canvas course to retrieve its modules."}
-                    else:
-                        result = get_modules(course_id)
-
-                        output = [
-                            {
-                                "id": item.get("id"),
-                                "name": item.get("name")
-                            }
-                            for item in result
-                        ]
-
+                if not course_id:
+                    output = {"error": "Select a Canvas course first."}
+                elif call.name == "get_course_modules":
+                    result = get_modules(course_id)
+                    output = [
+                        {"id": item.get("id"), "name": item.get("name")}
+                        for item in result
+                    ]
                 elif call.name == "get_course_pages":
-
-                    if not course_id:
-                        output = {"error": "Select a Canvas course to retrieve its pages."}
-                    else:
-                        result = get_pages(course_id)
-
-                        output = [
-                            {
-                                "title": item.get("title"),
-                                "url": item.get("url")
-                            }
-                            for item in result
-                        ]
-
+                    result = get_pages(course_id)
+                    output = [
+                        {"title": item.get("title"), "url": item.get("url")}
+                        for item in result
+                    ]
                 else:
                     output = {"error": "Unknown tool"}
-
             except Exception as error:
                 output = {"error": str(error)}
 
             outputs.append({
                 "type": "function_call_output",
                 "call_id": call.call_id,
-                "output": json.dumps(
-                    output,
-                    ensure_ascii=False
-                )
+                "output": json.dumps(output, ensure_ascii=False)
             })
 
         response = client.responses.create(
             model="gpt-5.5",
             instructions=instructions,
-            input=(
-                history
-                + list(response.output)
-                + outputs
-            ),
-            tools=TOOLS
+            input=history + list(response.output) + outputs,
+            tools=tools
         )
 
     return response.output_text or "No response generated."
+
 
 # =====================================
 # 11. CANVAS ASSISTANT INTERFACE
 # =====================================
 
+LANGUAGES = {
+    "English": {
+        "title": "Canvas Assistant",
+        "welcome": "Your intelligent assistant for Canvas LMS",
+        "subtitle": "Courses, modules, pages, learning workflows and Canvas support.",
+        "course": "Optional: select a Canvas course",
+        "no_course": "No course selected — general Canvas help is available.",
+        "placeholder": "Ask about Canvas...",
+        "upload": "Upload files and images",
+        "voice": "Record a voice message",
+        "thinking": "Thinking...",
+        "clear": "Clear conversation",
+        "refresh": "Refresh courses",
+        "connections": "Connections",
+        "voice_settings": "Voice settings",
+        "voice_toggle": "Enable spoken responses",
+        "attached": "Attached",
+        "course_hint": "Course selection is optional. Select one only for course-specific questions."
+    },
+    "العربية": {
+        "title": "مساعد كانفس",
+        "welcome": "مساعدك الذكي لنظام Canvas",
+        "subtitle": "المقررات والوحدات والصفحات وسير العمل والدعم الفني لكانفس.",
+        "course": "اختياري: اختر مقرراً من Canvas",
+        "no_course": "لم يتم اختيار مقرر — يمكنك طرح أسئلة عامة عن Canvas.",
+        "placeholder": "اسأل عن Canvas...",
+        "upload": "رفع الملفات والصور",
+        "voice": "سجّل رسالة صوتية",
+        "thinking": "جاري التفكير...",
+        "clear": "مسح المحادثة",
+        "refresh": "تحديث المقررات",
+        "connections": "الاتصالات",
+        "voice_settings": "إعدادات الصوت",
+        "voice_toggle": "تفعيل الردود الصوتية",
+        "attached": "مرفق",
+        "course_hint": "اختيار المقرر اختياري. اختر مقرراً فقط عندما يكون سؤالك متعلقاً بمقرر محدد."
+    }
+}
+
+if "language" not in st.session_state:
+    st.session_state.language = "English"
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "courses" not in st.session_state:
+    st.session_state.courses = []
+if "voice_enabled" not in st.session_state:
+    st.session_state.voice_enabled = True
+
+T = LANGUAGES[st.session_state.language]
+
 st.markdown("""
 <style>
-.stApp {
-    background: radial-gradient(circle at 85% 0%, rgba(24,182,164,.10), transparent 28%),
-                linear-gradient(135deg, #0B1425 0%, #101D35 55%, #13243D 100%);
-    color: #EAF1FA;
-}
-.block-container { max-width: 1480px; padding-top: 1.8rem; padding-bottom: 3rem; }
-section[data-testid="stSidebar"] { background: #0A1527; border-right: 1px solid rgba(159,176,199,.16); }
-h1, h2, h3, h4, p, label, .stMarkdown, [data-testid="stCaptionContainer"] { color: #EAF1FA; }
-[data-testid="stChatMessage"], [data-testid="stFileUploader"], [data-testid="stExpander"] {
-    background: rgba(23,41,68,.88); border: 1px solid rgba(159,176,199,.16); border-radius: 18px;
-}
-[data-testid="stChatMessage"] { padding: 1rem 1.15rem; margin-bottom: .8rem; }
-.stButton > button, .stDownloadButton > button {
-    background: linear-gradient(135deg, #18B6A4, #138D91); color: #061B2A;
-    border: 0; border-radius: 12px; min-height: 2.65rem; font-weight: 750;
-}
-.stChatInput textarea, .stTextInput input, .stSelectbox div[data-baseweb="select"] {
-    background: #172944 !important; color: #F3F7FC !important;
-    border-color: rgba(159,176,199,.24) !important; border-radius: 12px !important;
-}
-hr { border-color: rgba(159,176,199,.18); }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Cairo:wght@400;600;700;800&display=swap');
+.stApp { background: radial-gradient(circle at 85% 0%, rgba(24,182,164,.10), transparent 28%), linear-gradient(135deg,#0B1425 0%,#101D35 55%,#13243D 100%); color:#EAF1FA; font-family:Inter,'Cairo',sans-serif; }
+.block-container { max-width:1480px; padding-top:1.8rem; padding-bottom:3rem; }
+section[data-testid="stSidebar"] { background:#0A1527; border-right:1px solid rgba(159,176,199,.16); }
+h1,h2,h3,h4,p,label,.stMarkdown,[data-testid="stCaptionContainer"] { color:#EAF1FA; }
+h1 { letter-spacing:-.035em; font-weight:800 !important; }
+[data-testid="stChatMessage"],[data-testid="stFileUploader"],[data-testid="stExpander"] { background:rgba(23,41,68,.88); border:1px solid rgba(159,176,199,.16); border-radius:18px; }
+[data-testid="stChatMessage"] { padding:1rem 1.15rem; margin-bottom:.8rem; }
+.stButton>button,.stDownloadButton>button { background:linear-gradient(135deg,#18B6A4,#138D91); color:#061B2A; border:0; border-radius:12px; min-height:2.65rem; font-weight:750; }
+.stButton>button:hover,.stDownloadButton>button:hover { background:#39D0BD; color:#061B2A; border:0; }
+.stChatInput textarea,.stTextInput input,.stSelectbox div[data-baseweb="select"] { background:#172944 !important; color:#F3F7FC !important; border-color:rgba(159,176,199,.24) !important; border-radius:12px !important; }
+.stChatInput textarea::placeholder,.stTextInput input::placeholder { color:#9FB0C7 !important; }
+[data-testid="stFileUploader"] section { background:transparent; }
+hr { border-color:rgba(159,176,199,.18); }
+[data-testid="stAlert"] { border-radius:12px; }
 </style>
 """, unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("# 🎓 Canvas Assistant")
-    st.caption("Canvas support for authorized university staff")
-    st.divider()
-
+    st.caption("Canvas LMS support workspace")
     language = st.selectbox(
-        "Language",
+        "Language / اللغة",
         ["English", "العربية"],
         index=0 if st.session_state.language == "English" else 1
     )
@@ -516,76 +466,53 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-    st.markdown("### Canvas Courses")
-
-    if st.button("↻ Refresh courses", use_container_width=True):
+    if st.button(T["refresh"], use_container_width=True):
         try:
             st.cache_data.clear()
             st.session_state.courses = get_courses()
-            st.success("Courses refreshed")
+            st.success("Courses refreshed" if language == "English" else "تم تحديث المقررات")
         except Exception as error:
-            st.error(f"Canvas error: {error}")
+            st.error(f"Canvas API: {error}")
 
     if not st.session_state.courses:
         try:
             st.session_state.courses = get_courses()
         except Exception as error:
-            st.error(f"Canvas connection: {error}")
+            st.warning(f"Canvas connection: {error}")
 
     courses = st.session_state.courses
-    selected_course = None
-    course_options = ["General Canvas support — no course selected"]
-    course_map = {}
-    for c in courses:
-        if c.get("id") is not None:
-            label = f"{c.get('name', 'Unnamed')} (ID: {c['id']})"
-            course_options.append(label)
-            course_map[label] = c
-
-    selected_name = st.selectbox(
-        "Optional course context",
-        course_options,
-        help="A course is only needed for course-specific information. You can chat without selecting one."
-    )
-    selected_course = course_map.get(selected_name)
+    course_options = {"— No course selected —": None}
+    for item in courses:
+        if item.get("id") is not None:
+            label = f"{item.get('name', 'Unnamed course')} (ID: {item['id']})"
+            course_options[label] = item
+    selected_label = st.selectbox(T["course"], list(course_options.keys()))
+    selected_course = course_options[selected_label]
+    st.caption(T["course_hint"])
 
     st.divider()
-    st.markdown("### Connections")
-    st.success("OpenAI API configured")
-    st.success("Canvas API configured")
-    st.caption("The current Canvas API connection uses the token configured in the deployment secrets.")
-
+    st.markdown(f"### {T['connections']}")
+    st.success("OpenAI API")
+    st.success("Canvas API")
     if st.button(T["clear"], use_container_width=True):
         st.session_state.messages = []
         st.rerun()
 
-# Main Canvas-focused workspace
-page_title = "مساعد كانفس" if st.session_state.language == "العربية" else "Canvas Assistant"
-page_subtitle = (
-    "مساعدك الذكي لدعم وإدارة Canvas"
-    if st.session_state.language == "العربية"
-    else "Your AI workspace for Canvas support and administration"
-)
-st.title(f"🎓 {page_title}")
-st.caption(page_subtitle)
-st.divider()
-
+st.title("🎓 Canvas Assistant")
+st.markdown(f"### {T['welcome']}")
+st.caption(T["subtitle"])
 if selected_course:
-    st.info(
-        f"Selected course: {selected_course.get('name', 'Unnamed course')} "
-        f"(ID: {selected_course.get('id')})"
-    )
+    st.info(f"Selected course: {selected_course.get('name', 'Unnamed course')} · ID: {selected_course.get('id')}")
 else:
-    st.caption("General Canvas support mode — no course selected.")
+    st.caption(T["no_course"])
 
 uploaded_files = st.file_uploader(
     T["upload"],
-    type=["pdf", "docx", "xlsx", "pptx", "txt", "csv",
-          "png", "jpg", "jpeg", "webp", "mp3", "wav", "m4a"],
+    type=["pdf","docx","xlsx","pptx","txt","csv","png","jpg","jpeg","webp","mp3","wav","m4a"],
     accept_multiple_files=True
 )
 if uploaded_files:
-    st.caption(" · ".join(file.name for file in uploaded_files))
+    st.caption(" · ".join(f"{T['attached']}: {file.name}" for file in uploaded_files))
 
 audio_input = st.audio_input(T["voice"])
 voice_prompt = None
@@ -608,7 +535,6 @@ if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
-
     with st.chat_message("assistant"):
         try:
             with st.spinner(T["thinking"]):
@@ -623,13 +549,14 @@ if prompt:
         except Exception as error:
             answer = f"Assistant error: {error}"
             st.error(answer)
-
     st.session_state.messages.append({"role": "assistant", "content": answer})
 
-with st.expander("Voice settings"):
+with st.expander(T["voice_settings"]):
     st.session_state.voice_enabled = st.toggle(
-        "Enable spoken responses",
-        value=st.session_state.voice_enabled
+        T["voice_toggle"], value=st.session_state.voice_enabled
     )
-    st.caption("Recorded voice input and spoken replies are supported.")
-
+    st.caption(
+        "Recorded voice input and spoken replies are supported. Continuous real-time voice is a separate development stage."
+        if st.session_state.language == "English"
+        else "يدعم التطبيق تسجيل الرسائل الصوتية وإنشاء ردود منطوقة. المحادثة الصوتية الفورية المستمرة مرحلة تطوير منفصلة."
+    )
